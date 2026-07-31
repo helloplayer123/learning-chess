@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chess Coach — Openings, Free Play &amp; Checkmates</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<style>
+  :root{
+    --bg:#1a1a1a; --panel:#242424; --panel2:#2c2c2c; --border:#3a3a3a;
+    --light-sq:#eddcb4; --dark-sq:#a97a50; --accent:#7fb069; --accent2:#e0a458;
+    --text:#eaeaea; --muted:#9a9a9a; --danger:#d16a6a; --info:#5a9bd4;
+  }
+  * { box-sizing:border-box; }
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text);
+  }
+  header{
+    padding:18px 24px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;
+  }
+  header h1{ margin:0; font-size:1.3rem; }
+  header p{ margin:2px 0 0; color:var(--muted); font-size:0.85rem; }
+  nav{ display:flex; gap:8px; padding:14px 24px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  nav button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    padding:8px 16px; border-radius:6px; cursor:pointer; font-size:0.9rem;
+  }
+  nav button.active{ background:var(--accent); color:#12210f; border-color:var(--accent); font-weight:600; }
+  main{
+    display:flex; gap:20px; padding:20px 24px; align-items:flex-start; flex-wrap:wrap;
+  }
+  .board-col{ flex:0 0 auto; }
+  .board-frame{
+    display:grid; grid-template-columns:22px 448px; grid-template-rows:448px 22px;
+    width:fit-content;
+  }
+  #board{
+    grid-column:2; grid-row:1;
+    display:grid; grid-template-columns:repeat(8,56px); grid-template-rows:repeat(8,56px);
+    border:3px solid #4a3527; box-shadow:0 4px 18px rgba(0,0,0,0.4);
+  }
+  .rank-labels{ grid-column:1; grid-row:1; display:flex; flex-direction:column; }
+  .rank-labels div{ height:56px; display:flex; align-items:center; justify-content:center; font-size:0.72rem; color:var(--muted); }
+  .file-labels{ grid-column:2; grid-row:2; display:flex; flex-direction:row; }
+  .file-labels div{ width:56px; display:flex; align-items:center; justify-content:center; font-size:0.72rem; color:var(--muted); }
+  .sq{ position:relative; display:flex; align-items:center; justify-content:center; font-size:38px; cursor:pointer; user-select:none; }
+  .sq.light{ background:var(--light-sq); }
+  .sq.dark{ background:var(--dark-sq); }
+  .sq.selected{ outline:3px solid var(--accent2); outline-offset:-3px; }
+  .sq.last-from, .sq.last-to{ background-image:linear-gradient(rgba(247,236,109,0.45),rgba(247,236,109,0.45)); }
+  .sq.hint-from, .sq.hint-to{ box-shadow:inset 0 0 0 4px rgba(127,176,105,0.9); }
+  .sq.hint-from::after{ content:''; position:absolute; inset:0; background:rgba(127,176,105,0.18); pointer-events:none; }
+  .sq .dot{ position:absolute; width:16px; height:16px; border-radius:50%; background:rgba(30,30,30,0.35); pointer-events:none; }
+  .sq .ring{ position:absolute; inset:4px; border:4px solid rgba(30,30,30,0.35); border-radius:50%; pointer-events:none; }
+  .piece-w{ color:#fdfdfd; text-shadow:0 1px 2px rgba(0,0,0,0.6), 0 0 1px #000; }
+  .piece-b{ color:#151515; text-shadow:0 1px 1px rgba(255,255,255,0.25); }
+  .board-controls{ margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; }
+  .board-controls button{
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    padding:7px 12px; border-radius:6px; cursor:pointer; font-size:0.85rem;
+  }
+  .board-controls button:hover, nav button:hover{ border-color:var(--accent); }
+  #status-line{ margin-top:10px; font-size:0.9rem; color:var(--accent2); min-height:1.3em; }
+  .side-col{ flex:1 1 320px; min-width:300px; display:flex; flex-direction:column; gap:16px; }
+  .panel{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; }
+  .panel h2{ margin:0 0 10px; font-size:1rem; }
+  .panel h3{ margin:0 0 8px; font-size:0.85rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; }
+  #commentary-log{ max-height:380px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding-right:4px; }
+  .entry{ border-left:3px solid var(--border); padding:6px 10px; font-size:0.88rem; line-height:1.4; }
+  .entry.opponent{ border-color:var(--danger); }
+  .entry.student{ border-color:var(--accent); }
+  .entry.system{ border-color:var(--info); }
+  .entry.best{ border-color:var(--accent); }
+  .entry.better{ border-color:var(--accent2); }
+  .entry.preview{ border-color:var(--accent2); background:rgba(224,164,88,0.06); }
+  .entry.alt{ border-color:var(--info); background:rgba(90,155,212,0.07); }
+  .term{ border-bottom:1px dotted var(--accent2); cursor:help; color:var(--accent2); }
+  #glossary-popup{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); align-items:center; justify-content:center; z-index:50; }
+  #glossary-popup.show{ display:flex; }
+  #glossary-popup .gp-inner{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:20px; max-width:360px; }
+  #glossary-popup .gp-title{ font-weight:700; margin-bottom:8px; text-transform:capitalize; font-size:1.05rem; }
+  #glossary-popup .gp-def{ font-size:0.9rem; line-height:1.5; color:var(--text); margin-bottom:14px; }
+  #glossary-popup .gp-close{ background:var(--accent); color:#12210f; border:none; padding:6px 14px; border-radius:6px; cursor:pointer; font-weight:600; font-size:0.85rem; }
+  .entry .etitle{ font-weight:600; margin-bottom:2px; }
+  .mode-view{ display:none; }
+  .mode-view.active{ display:block; }
+  .line-list, .puzzle-list{ display:flex; flex-direction:column; gap:6px; }
+  .line-list button, .puzzle-list button{
+    text-align:left; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    padding:9px 12px; border-radius:6px; cursor:pointer; font-size:0.88rem;
+  }
+  .line-list button.active, .puzzle-list button.active{ border-color:var(--accent); background:#2b3a26; }
+  .repertoire-desc{ font-size:0.82rem; color:var(--muted); margin-top:6px; }
+  select, input[type=radio]{ accent-color:var(--accent); }
+  label.radio-opt{ font-size:0.88rem; margin-right:14px; cursor:pointer; }
+  .steps-progress{ font-size:0.8rem; color:var(--muted); margin-top:8px; }
+  footer{ padding:16px 24px; color:var(--muted); font-size:0.78rem; border-top:1px solid var(--border); }
+  ::-webkit-scrollbar{ width:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>♞ Chess Coach</h1>
+    <p>Openings · Free Play vs Bot · Checkmate Patterns — with live commentary</p>
+  </div>
+  <div style="font-size:0.8rem; color:var(--muted);">Board is always shown White-at-bottom</div>
+</header>
+
+<nav>
+  <button data-mode="openings" class="active">Opening Trainer</button>
+  <button data-mode="freeplay">Free Play vs Bot</button>
+  <button data-mode="mates">Checkmate Patterns</button>
+</nav>
+
+<main>
+  <div class="board-col">
+    <div class="board-frame">
+      <div class="rank-labels">
+        <div>8</div><div>7</div><div>6</div><div>5</div><div>4</div><div>3</div><div>2</div><div>1</div>
+      </div>
+      <div id="board"></div>
+      <div></div>
+      <div class="file-labels">
+        <div>a</div><div>b</div><div>c</div><div>d</div><div>e</div><div>f</div><div>g</div><div>h</div>
+      </div>
+    </div>
+    <div class="board-controls" id="board-controls"></div>
+    <div id="status-line"></div>
+  </div>
+
+  <div class="side-col">
+
+    <div class="panel mode-view active" id="view-openings">
+      <h2>Opening Repertoire</h2>
+      <div style="margin-bottom:10px;">
+        <label class="radio-opt"><input type="radio" name="openingcolor" value="w"> Practice as White</label>
+        <label class="radio-opt"><input type="radio" name="openingcolor" value="b"> Practice as Black</label>
+      </div>
+      <div class="line-list" id="line-list"></div>
+      <div class="repertoire-desc" id="line-desc"></div>
+      <p class="repertoire-desc">Tip: switch sides anytime with the toggle above to see the position from the other player's perspective too.</p>
+      <div class="steps-progress" id="line-progress"></div>
+    </div>
+
+    <div class="panel mode-view" id="view-freeplay">
+      <h2>Free Play</h2>
+      <div>
+        <label class="radio-opt"><input type="radio" name="fpcolor" value="w" checked> Play White</label>
+        <label class="radio-opt"><input type="radio" name="fpcolor" value="b"> Play Black</label>
+      </div>
+      <p class="repertoire-desc">You play against a lightweight built-in bot (~1000–1300 strength, material + center-control evaluation, no opening book). It's meant for pattern practice, not a substitute for a full engine.</p>
+    </div>
+
+    <div class="panel mode-view" id="view-mates">
+      <h2>Checkmate Patterns</h2>
+      <div class="puzzle-list" id="puzzle-list"></div>
+      <p class="repertoire-desc" id="mate-desc">Pick a pattern and find the checkmate in one move.</p>
+    </div>
+
+    <div class="panel">
+      <h3>Commentary</h3>
+      <div id="commentary-log"></div>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  Built for Aaron's chess coaching project. Auto-promotes to Queen. Free-play bot and move-quality comparisons are a simplified heuristic engine, not tournament-strength analysis.
+</footer>
+
+<script>
+(function(){
+
+// ---------- Data: opening repertoire ----------
+const OPENINGS = [
+  {
+    id: 'italian',
+    name: 'Italian Game (White)',
+    defaultColor: 'w',
+    desc: 'Active, low-theory opening for White. Develops fast, targets f7, and leads to open, tactical positions.',
+    steps: [
+      { color:'w', from:'e2', to:'e4', label:'e4', explain:'Stakes a claim in the center and opens diagonals for the bishop and queen.' },
+      { color:'b', from:'e7', to:'e5', label:'e5', explain:'Black mirrors in the center, fighting for the same key squares and freeing development.' },
+      { color:'w', from:'g1', to:'f3', label:'Nf3', explain:'Attacks the e5 pawn, develops toward the center, and prepares kingside castling.' },
+      { color:'b', from:'b8', to:'c6', label:'Nc6', explain:'Defends e5 while developing a piece — the standard, principled reply.' },
+      { color:'w', from:'f1', to:'c4', label:'Bc4', explain:'The "Italian" bishop. It eyes f7, the weakest square in Black\'s camp since only the king guards it.' },
+      { color:'b', from:'f8', to:'c5', label:'Bc5', explain:'Black develops symmetrically, aiming the bishop at f2 and preparing to castle.', alternative:'Instead of mirroring with ...Bc5 (the Giuoco Piano), Black could play ...Nf6 (the Two Knights Defense), inviting sharper tactics like the Fried Liver Attack after White plays Ng5 — a completely different, much more aggressive fight than the calmer line below.' },
+      { color:'w', from:'c2', to:'c3', label:'c3', explain:'Prepares d4 to build a full pawn center, and gives the bishop a retreat square on c2 if attacked later.' },
+      { color:'b', from:'g8', to:'f6', label:'Nf6', explain:'Develops the last minor piece and attacks e4 — Black is fully caught up in development.' },
+      { color:'w', from:'d2', to:'d4', label:'d4', explain:'The central break. White strikes now, before Black finishes castling, to open the center on favorable terms.' },
+      { color:'b', from:'e5', to:'d4', label:'exd4', explain:'Practically forced — ignoring this lets White\'s center steamroll forward.', alternative:'White\'s last move (d4) attacks both the e5 pawn and the c5 bishop at the same time — a double attack. If Black plays anything other than ...exd4 here (say, ...O-O or ...Bb6), White simply replies dxc5, winning the bishop for nothing. Capturing on d4 removes the threat and keeps material equal.' },
+      { color:'w', from:'c3', to:'d4', label:'cxd4', explain:'Recaptures, restoring a full center. Note Black\'s bishop on c5 is now attacked by the d4 pawn.' },
+      { color:'b', from:'c5', to:'b4', label:'Bb4+', explain:'Checks first, gaining a tempo before deciding where the bishop lands — disrupts White\'s development briefly.', alternative:'Black could instead just retreat quietly with ...Bb6, keeping the bishop safe on the long diagonal without committing to a trade. But skipping the check gives up a free tempo — White gets to develop a move earlier without having to respond to anything.' },
+      { color:'w', from:'c1', to:'d2', label:'Bd2', explain:'Blocks the check while offering a trade of light-squared minor pieces, keeping development on schedule.', alternative:'White could also block with Nc3 instead, developing a knight rather than the bishop. That leads to sharper, more theory-heavy positions (sometimes called the Möller Attack). Bd2 is the simpler, safer choice for a first repertoire — it trades pieces and heads toward a calmer game.' },
+      { color:'b', from:'b4', to:'d2', label:'Bxd2+', explain:'Trades off the bishop rather than retreating and losing more time.' },
+      { color:'w', from:'b1', to:'d2', label:'Nbxd2', explain:'Recaptures with the knight. White ends this sequence with a strong center and easy development — a small, stable edge.' },
+    ]
+  },
+  {
+    id: 'carokann',
+    name: 'Caro-Kann (Black vs 1.e4)',
+    defaultColor: 'b',
+    desc: 'Rock-solid response to 1.e4. Avoids sharp forced lines and gives Black a resilient pawn structure.',
+    steps: [
+      { color:'w', from:'e2', to:'e4', label:'e4', explain:'White claims the center immediately.' },
+      { color:'b', from:'c7', to:'c6', label:'c6', explain:'Prepares ...d5 without blocking the c8-bishop — the key idea that makes the Caro-Kann solid.' },
+      { color:'w', from:'d2', to:'d4', label:'d4', explain:'White builds a full center, expecting Black to challenge it next.' },
+      { color:'b', from:'d7', to:'d5', label:'d5', explain:'Now that c6 supports it, Black strikes the center directly.' },
+      { color:'w', from:'b1', to:'c3', label:'Nc3', explain:'Develops and adds pressure on d5, keeping the central tension alive.' },
+      { color:'b', from:'d5', to:'e4', label:'dxe4', explain:'Trades the flank-supported pawn for a share of the center — simplifies while staying solid.', alternative:'If Black delays capturing, White gets to choose how the center resolves — for example pushing e5 to gain space and cramp Black\'s pieces, or playing exd5 to simplify on White\'s own terms. Capturing now lets Black dictate the structure instead of White.' },
+      { color:'w', from:'c3', to:'e4', label:'Nxe4', explain:'Recaptures, centralizing the knight with tempo-gaining potential.' },
+      { color:'b', from:'c8', to:'f5', label:'Bf5', explain:'The critical Caro-Kann idea: get the "problem bishop" outside the pawn chain before playing ...e6.', alternative:'If Black plays ...e6 before developing this bishop, the bishop gets stuck behind its own pawn chain with nowhere good to go — the classic "bad bishop" problem. Getting it out to f5 first, before closing the position with ...e6, is the entire point of this move order.' },
+      { color:'w', from:'e4', to:'g3', label:'Ng3', explain:'Kicks the bishop with tempo while developing toward the kingside.' },
+      { color:'b', from:'f5', to:'g6', label:'Bg6', explain:'Retreats but stays active on the long diagonal, keeping options for ...e6 and ...Bd6 or ...Be7.' },
+      { color:'w', from:'h2', to:'h4', label:'h4', explain:'Gains space and threatens h5, aiming to harass the bishop further.' },
+      { color:'b', from:'h7', to:'h6', label:'h6', explain:'Stops h5 in its tracks and secures a retreat square for the bishop on h7.', alternative:'Without ...h6, White plays h5 next, kicking the g6-bishop again — either trading it off or forcing it to a passive square and winning kingside space in the process. The small pawn move h6 stops that plan cold.' },
+      { color:'w', from:'g1', to:'f3', label:'Nf3', explain:'Completes development, preparing to castle and control e5.' },
+      { color:'b', from:'b8', to:'d7', label:'Nd7', explain:'Prepares ...Ngf6 and ...e6, rounding out a solid, resilient setup that\'s hard to attack.' },
+    ]
+  },
+  {
+    id: 'qgd',
+    name: 'Queen\'s Gambit Declined (Black vs 1.d4)',
+    defaultColor: 'b',
+    desc: 'Classical, principled reply to 1.d4. Teaches central pawn tension and correct piece-development order.',
+    steps: [
+      { color:'w', from:'d2', to:'d4', label:'d4', explain:'White claims the center with the queen\'s pawn.' },
+      { color:'b', from:'d7', to:'d5', label:'d5', explain:'Black mirrors, contesting the center immediately.' },
+      { color:'w', from:'c2', to:'c4', label:'c4', explain:'The Queen\'s Gambit — offers the c-pawn to lure Black\'s d-pawn away or gain extra central influence.' },
+      { color:'b', from:'e7', to:'e6', label:'e6', explain:'Declines the gambit, solidly supporting d5 and opening the f8-bishop\'s diagonal for development (the "Declined" in QGD).', alternative:'Black could instead accept the gambit with ...dxc4 (the Queen\'s Gambit Accepted), grabbing the pawn temporarily. It usually just hands White an easy lead in development and central control once White replays to win the pawn back, so most solid repertoires decline it with ...e6 instead.' },
+      { color:'w', from:'b1', to:'c3', label:'Nc3', explain:'Develops naturally, adding another attacker on d5.' },
+      { color:'b', from:'g8', to:'f6', label:'Nf6', explain:'Develops and adds a defender of d5, keeping the center under control.' },
+      { color:'w', from:'c1', to:'g5', label:'Bg5', explain:'A key QGD idea: pins the knight to the queen, increasing pressure on d5.' },
+      { color:'b', from:'f8', to:'e7', label:'Be7', explain:'Prepares to break the pin (...Nf6 can later move if needed) and readies castling.', alternative:'If Black leaves the pin unaddressed for too long, White can keep piling on with e3/Nf3, or even consider Bxf6 to damage Black\'s pawn structure. Developing ...Be7 prepares to meet that with ...h6 or simply castling, so the pin stops being dangerous.' },
+      { color:'w', from:'g1', to:'f3', label:'Nf3', explain:'Completes minor-piece development before committing the king or center pawns further.' },
+      { color:'b', from:'e8', to:'g8', label:'O-O', explain:'Castles into safety and connects the rooks — priority after development in solid openings.' },
+      { color:'w', from:'e2', to:'e3', label:'e3', explain:'Solidifies the center and opens the f1-bishop\'s diagonal, keeping options flexible.' },
+      { color:'b', from:'b8', to:'d7', label:'Nbd7', explain:'Prepares ...c6 or ...c5 and supports a future ...dxc4 recapture — the standard QGD setup is complete.' },
+    ]
+  }
+];
+
+// ---------- Data: checkmate puzzles ----------
+const PUZZLES = [
+  {
+    id:'backrank',
+    name:'Back-Rank Mate',
+    fen:'7k/6pp/8/8/8/8/8/R3K3 w - - 0 1',
+    solution:{ from:'a1', to:'a8' },
+    pattern:'Back-rank mate: the king is trapped on the back rank by its own pawns, with no piece able to block or capture the rook.'
+  },
+  {
+    id:'smothered',
+    name:'Smothered Mate',
+    fen:'6rk/6pp/3N4/8/8/8/8/K7 w - - 0 1',
+    solution:{ from:'d6', to:'f7' },
+    pattern:'Smothered mate: the king is boxed in entirely by its own pieces (rook and pawns), so a single knight check is unanswerable.'
+  },
+  {
+    id:'ladder',
+    name:'Ladder (Rook-Cut) Mate',
+    fen:'7k/R7/8/8/8/8/8/1R2K3 w - - 0 1',
+    solution:{ from:'b1', to:'b8' },
+    pattern:'Ladder mate: one rook cuts off an entire rank while the second delivers mate on the corner — the classic technique for mating with two rooks (or rook+queen) on an open board.'
+  }
+];
+
+// ---------- Data: glossary (click any dotted term in the commentary) ----------
+const GLOSSARY = [
+  { re:/smothered mate/i, label:'smothered mate', def:'A checkmate where the king has no legal moves because it is completely surrounded by its own pieces, so a single check (almost always by a knight) can\'t be escaped, blocked, or captured.' },
+  { re:/ladder(?: \(rook-cut\))? mate/i, label:'ladder mate', def:'A technique for mating with two rooks (or a rook and queen): one piece cuts off an entire rank or file so the king can\'t escape, while the other delivers check right next to it — repeating rank by rank until the king is mated at the edge of the board.' },
+  { re:/back[- ]rank/i, label:'back rank', def:'The row closest to each player (rank 1 for White, rank 8 for Black). A "back-rank mate" happens when a king trapped there by its own pawns gets checkmated by a rook or queen along that row.' },
+  { re:/pawn structure/i, label:'pawn structure', def:'The overall shape and arrangement of a side\'s pawns. A "solid" structure has few weaknesses (like isolated or doubled pawns) and is hard for the opponent to attack.' },
+  { re:/central break/i, label:'central break', def:'A pawn move (often d4 or e4/e5) that challenges the opponent\'s central pawns, opening lines and fighting for space at the moment your pieces are ready to exploit it.' },
+  { re:/steamroll\w*/i, label:'steamroll', def:'When a strong, connected pawn center is allowed to advance unchecked, it gains so much space and opens so many lines that it overwhelms the opponent\'s position — like a steamroller flattening everything in front of it.' },
+  { re:/castl\w*/i, label:'castling', def:'A special king-and-rook move (kingside "O-O" or queenside "O-O-O") that moves the king two squares toward a rook and brings that rook to the other side of it — usually done early to tuck the king away safely and connect the rooks.' },
+  { re:/diagonal\w*/i, label:'diagonal', def:'A line of same-colored squares running at a 45° angle (e.g. a1 to h8). Bishops and the queen move along diagonals — an "open diagonal" has no pawns blocking it.' },
+  { re:/\btempo\w*/i, label:'tempo', def:'A "move" measured in time. Playing "with tempo" means your move also creates a threat, forcing the opponent to react — so you effectively gain a free extra move while they\'re busy defending.' },
+  { re:/develop\w*/i, label:'development', def:'Moving your pieces (especially knights and bishops) off their starting squares early on so they\'re active in the game and your king is free to castle to safety.' },
+  { re:/\bpin(?:s|ned|ning)?\b/i, label:'pin', def:'A tactic where a piece can\'t (or shouldn\'t) move because doing so would expose a more valuable piece behind it — often the king — to attack.' },
+  { re:/\bcenter\b|\bcentral\b/i, label:'center', def:'The four central squares (d4, d5, e4, e5), or the broader middle of the board around them. Controlling the center gives your pieces more mobility and influence over the whole board.' },
+  { re:/gambit/i, label:'gambit', def:'An opening where a player deliberately offers a pawn (or more) in exchange for faster development, extra central control, or attacking chances.' }
+];
+
+function escapeHtml(s){
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function findGlossaryMatches(text){
+  const matches = [];
+  GLOSSARY.forEach(entry => {
+    const re = new RegExp(entry.re.source, 'gi');
+    let m;
+    while((m = re.exec(text))){
+      matches.push({ start:m.index, end:m.index + m[0].length, label:entry.label, def:entry.def, matchedText:m[0] });
+      if(re.lastIndex === m.index) re.lastIndex++;
+    }
+  });
+  matches.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const chosen = [];
+  let lastEnd = -1;
+  for(const m of matches){
+    if(m.start >= lastEnd){ chosen.push(m); lastEnd = m.end; }
+  }
+  return chosen;
+}
+
+function linkifyGlossary(text){
+  const matches = findGlossaryMatches(text);
+  if(matches.length === 0) return escapeHtml(text);
+  let result = '';
+  let cursor = 0;
+  matches.forEach(m => {
+    result += escapeHtml(text.slice(cursor, m.start));
+    result += '<span class="term" data-label="' + escapeHtml(m.label) + '" data-def="' + escapeHtml(m.def) + '">' + escapeHtml(m.matchedText) + '</span>';
+    cursor = m.end;
+  });
+  result += escapeHtml(text.slice(cursor));
+  return result;
+}
+
+function showGlossaryPopup(label, def){
+  let popup = document.getElementById('glossary-popup');
+  if(!popup){
+    popup = document.createElement('div');
+    popup.id = 'glossary-popup';
+    popup.innerHTML = '<div class="gp-inner"><div class="gp-title"></div><div class="gp-def"></div><button class="gp-close">Close</button></div>';
+    document.body.appendChild(popup);
+    popup.querySelector('.gp-close').addEventListener('click', () => popup.classList.remove('show'));
+    popup.addEventListener('click', (e) => { if(e.target === popup) popup.classList.remove('show'); });
+  }
+  popup.querySelector('.gp-title').textContent = label;
+  popup.querySelector('.gp-def').textContent = def;
+  popup.classList.add('show');
+}
+
+const PIECE_UNICODE = {
+  w:{ p:'♙', n:'♘', b:'♗', r:'♖', q:'♕', k:'♔' },
+  b:{ p:'♟', n:'♞', b:'♝', r:'♜', q:'♛', k:'♚' }
+};
+const PIECE_VALUES = { p:100, n:320, b:330, r:500, q:900, k:0 };
+const CENTER = ['d4','d5','e4','e5'];
+const EXT_CENTER = ['c3','c4','c5','c6','d3','d4','d5','d6','e3','e4','e5','e6','f3','f4','f5','f6'];
+const BOT_DEPTH = 3;
+
+// ---------- Global state ----------
+let mode = 'openings';
+let game = new Chess();
+let selectedSquare = null;
+let legalTargets = [];
+let lastMove = null;
+let botThinking = false;
+
+// openings state
+let currentLineId = OPENINGS[0].id;
+let openingStudentColor = OPENINGS[0].defaultColor;
+let currentStepIndex = 0;
+let lineWrongAttempts = 0;
+let announcedStepIndex = -1;
+
+// freeplay state
+let userColor = 'w';
+
+// mates state
+let currentPuzzleId = PUZZLES[0].id;
+let puzzleAttempts = 0;
+let puzzleSolved = false;
+
+// ---------- Helpers ----------
+function currentLine(){ return OPENINGS.find(o => o.id === currentLineId); }
+function currentPuzzle(){ return PUZZLES.find(p => p.id === currentPuzzleId); }
+
+function squareName(row, col){ return 'abcdefgh'[col] + (8 - row); }
+
+function logCommentary(title, text, type){
+  const log = document.getElementById('commentary-log');
+  const div = document.createElement('div');
+  div.className = 'entry ' + (type || 'system');
+  div.innerHTML = '<div class="etitle">' + linkifyGlossary(title) + '</div><div>' + linkifyGlossary(text) + '</div>';
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function clearCommentary(){
+  document.getElementById('commentary-log').innerHTML = '';
+}
+
+function setStatus(text){
+  document.getElementById('status-line').textContent = text;
+}
+
+// ---------- Board rendering ----------
+function renderBoard(){
+  const boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+  const board = game.board();
+
+  let hintFrom = null, hintTo = null;
+  if(mode === 'openings'){
+    const line = currentLine();
+    if(line && currentStepIndex < line.steps.length){
+      const step = line.steps[currentStepIndex];
+      if(step.color === openingStudentColor){ hintFrom = step.from; hintTo = step.to; }
+    }
+  }
+
+  for(let row=0; row<8; row++){
+    for(let col=0; col<8; col++){
+      const sq = squareName(row, col);
+      const cell = board[row][col];
+      const div = document.createElement('div');
+      const isLight = (row + col) % 2 === 0;
+      div.className = 'sq ' + (isLight ? 'light' : 'dark');
+      if(selectedSquare === sq) div.className += ' selected';
+      if(lastMove && (lastMove.from === sq)) div.className += ' last-from';
+      if(lastMove && (lastMove.to === sq)) div.className += ' last-to';
+      if(hintFrom === sq) div.className += ' hint-from';
+      if(hintTo === sq) div.className += ' hint-to';
+      if(cell){
+        div.innerHTML = '<span class="piece-' + cell.color + '">' + PIECE_UNICODE[cell.color][cell.type] + '</span>';
+      }
+      if(legalTargets.includes(sq)){
+        const marker = document.createElement('div');
+        marker.className = cell ? 'ring' : 'dot';
+        div.appendChild(marker);
+      }
+      div.addEventListener('click', () => onSquareClick(sq));
+      boardEl.appendChild(div);
+    }
+  }
+}
+
+function clearSelection(){
+  selectedSquare = null;
+  legalTargets = [];
+  renderBoard();
+}
+
+function selectSquare(sq){
+  selectedSquare = sq;
+  legalTargets = game.moves({ square: sq, verbose:true }).map(m => m.to);
+  renderBoard();
+}
+
+// ---------- Turn / mode gating ----------
+function isUserTurnNow(){
+  if(botThinking) return false;
+  if(mode === 'openings'){
+    const line = currentLine();
+    if(!line || currentStepIndex >= line.steps.length) return false;
+    return line.steps[currentStepIndex].color === openingStudentColor;
+  }
+  if(mode === 'freeplay'){
+    if(game.game_over()) return false;
+    return game.turn() === userColor;
+  }
+  if(mode === 'mates'){
+    return !puzzleSolved;
+  }
+  return false;
+}
+
+function onSquareClick(sq){
+  if(!isUserTurnNow()) return;
+  const piece = game.get(sq);
+  if(selectedSquare){
+    if(legalTargets.includes(sq)){
+      attemptMove(selectedSquare, sq);
+      return;
+    }
+    if(piece && piece.color === game.turn()){
+      selectSquare(sq);
+      return;
+    }
+    clearSelection();
+    return;
+  }
+  if(piece && piece.color === game.turn()){
+    selectSquare(sq);
+  }
+}
+
+// ---------- Move tagging for commentary ----------
+function describeMoveTags(moveObj){
+  const tags = [];
+  if(moveObj.flags.includes('c') || moveObj.flags.includes('e')) tags.push('capture');
+  if(moveObj.flags.includes('k') || moveObj.flags.includes('q')) tags.push('castle');
+  if(moveObj.san.includes('#')) tags.push('mate');
+  else if(moveObj.san.includes('+')) tags.push('check');
+  if(moveObj.piece === 'p' && CENTER.includes(moveObj.to)) tags.push('center-pawn');
+  const backRankSquares = ['a1','b1','c1','d1','e1','f1','g1','h1','a8','b8','c8','d8','e8','f8','g8','h8'];
+  if(moveObj.piece !== 'p' && moveObj.piece !== 'k' && backRankSquares.includes(moveObj.from)) tags.push('development');
+  return tags;
+}
+
+function tagsToSentence(tags, pieceLabel){
+  const parts = [];
+  if(tags.includes('mate')) return 'Delivers checkmate.';
+  if(tags.includes('castle')) parts.push('castles the king to safety and connects the rooks');
+  if(tags.includes('capture')) parts.push('captures material');
+  if(tags.includes('check')) parts.push('gives check, forcing an immediate response');
+  if(tags.includes('center-pawn')) parts.push('stakes a claim in the center');
+  if(tags.includes('development')) parts.push('develops a piece off the back rank');
+  if(parts.length === 0) parts.push('improves piece placement');
+  return parts.join(', ') + '.';
+}
+
+// ---------- Evaluation / simple engine ----------
+function evaluateBoard(g){
+  let score = 0;
+  const board = g.board();
+  for(let row=0; row<8; row++){
+    for(let col=0; col<8; col++){
+      const cell = board[row][col];
+      if(!cell) continue;
+      let val = PIECE_VALUES[cell.type];
+      const sq = squareName(row, col);
+      if(CENTER.includes(sq)) val += 15;
+      else if(EXT_CENTER.includes(sq)) val += 5;
+      score += cell.color === 'w' ? val : -val;
+    }
+  }
+  return score;
+}
+
+function minimax(g, depth, alpha, beta, maximizing){
+  if(g.in_checkmate()) return g.turn() === 'w' ? -100000 - depth : 100000 + depth;
+  if(depth === 0 || g.game_over()) return evaluateBoard(g);
+  const moves = g.moves();
+  if(maximizing){
+    let best = -Infinity;
+    for(const m of moves){
+      g.move(m);
+      const ev = minimax(g, depth - 1, alpha, beta, false);
+      g.undo();
+      best = Math.max(best, ev);
+      alpha = Math.max(alpha, ev);
+      if(beta <= alpha) break;
+    }
+    return best;
+  } else {
+    let best = Infinity;
+    for(const m of moves){
+      g.move(m);
+      const ev = minimax(g, depth - 1, alpha, beta, true);
+      g.undo();
+      best = Math.min(best, ev);
+      beta = Math.min(beta, ev);
+      if(beta <= alpha) break;
+    }
+    return best;
+  }
+}
+
+function findBestMove(g, depth){
+  const side = g.turn();
+  const moves = g.moves({ verbose:true });
+  let bestMove = null;
+  let bestEval = side === 'w' ? -Infinity : Infinity;
+  for(const m of moves){
+    g.move(m.san);
+    const ev = minimax(g, depth - 1, -Infinity, Infinity, g.turn() === 'w');
+    g.undo();
+    if(side === 'w' ? ev > bestEval : ev < bestEval){
+      bestEval = ev;
+      bestMove = m;
+    }
+  }
+  return { move: bestMove, eval: bestEval };
+}
+
+// ---------- Move handling per mode ----------
+function attemptMove(from, to){
+  const fenBefore = game.fen();
+  const prevLastMove = lastMove;
+  const moveObj = game.move({ from, to, promotion:'q' });
+  if(!moveObj) return;
+  lastMove = { from, to };
+  selectedSquare = null;
+  legalTargets = [];
+
+  if(mode === 'openings') handleOpeningMove(moveObj, fenBefore, prevLastMove);
+  else if(mode === 'freeplay') handleFreeplayMove(moveObj, fenBefore);
+  else if(mode === 'mates') handleMatesMove(moveObj, fenBefore, prevLastMove);
+
+  renderBoard();
+}
+
+function handleOpeningMove(moveObj, fenBefore, prevLastMove){
+  const line = currentLine();
+  const step = line.steps[currentStepIndex];
+  if(moveObj.from === step.from && moveObj.to === step.to){
+    logCommentary('✓ Correct — ' + step.label + ' played', 'That matches the recommended line.', 'student');
+    currentStepIndex++;
+    lineWrongAttempts = 0;
+    updateLineProgress();
+    if(currentStepIndex >= line.steps.length){
+      updateOpeningStatus();
+      logCommentary('Line complete', 'You\'ve played through the ' + line.name + ' main line. Try another repertoire line, or replay this one to lock it in.', 'system');
+    } else {
+      updateOpeningStatus();
+      setTimeout(playAutoOpeningStep, 500);
+    }
+  } else {
+    game.undo();
+    lastMove = prevLastMove;
+    lineWrongAttempts++;
+    if(lineWrongAttempts >= 2){
+      logCommentary('Hint', 'The recommended move here is ' + step.label + ' — ' + step.explain, 'system');
+    } else {
+      logCommentary('Not quite', 'That move isn\'t the repertoire line here. Try again (a hint will show after another miss).', 'system');
+    }
+    renderBoard();
+  }
+}
+
+function playAutoOpeningStep(){
+  const line = currentLine();
+  if(currentStepIndex >= line.steps.length){ renderBoard(); return; }
+  const step = line.steps[currentStepIndex];
+  if(step.color === openingStudentColor){
+    updateOpeningStatus();
+    renderBoard();
+    return;
+  }
+  game.move({ from: step.from, to: step.to, promotion:'q' });
+  lastMove = { from: step.from, to: step.to };
+  logCommentary((step.color === 'w' ? 'White' : 'Black') + ' plays ' + step.label, step.explain, 'opponent');
+  if(step.alternative){
+    logCommentary('What if ' + (step.color === 'w' ? 'White' : 'Black') + ' had played something else?', step.alternative, 'alt');
+  }
+  currentStepIndex++;
+  updateLineProgress();
+  renderBoard();
+  if(currentStepIndex >= line.steps.length){
+    updateOpeningStatus();
+    logCommentary('Line complete', 'You\'ve played through the ' + line.name + ' main line. Try another repertoire line, or replay this one to lock it in.', 'system');
+  } else {
+    setTimeout(playAutoOpeningStep, 400);
+  }
+}
+
+function updateLineProgress(){
+  const line = currentLine();
+  document.getElementById('line-progress').textContent =
+    'Step ' + Math.min(currentStepIndex + 1, line.steps.length) + ' of ' + line.steps.length;
+}
+
+function updateOpeningStatus(){
+  const line = currentLine();
+  if(currentStepIndex >= line.steps.length){
+    setStatus('Line complete! Pick another line or replay this one.');
+    return;
+  }
+  const step = line.steps[currentStepIndex];
+  if(step.color === openingStudentColor){
+    setStatus('Your move: play ' + step.label + '  (click the highlighted square, then the highlighted destination: ' + step.from + ' → ' + step.to + ')');
+    if(announcedStepIndex !== currentStepIndex){
+      logCommentary('Coming up: ' + step.label + ' (' + step.from + ' → ' + step.to + ')', step.explain, 'preview');
+      if(step.alternative){
+        logCommentary('What if you don\'t play this?', step.alternative, 'alt');
+      }
+      announcedStepIndex = currentStepIndex;
+    }
+  } else {
+    setStatus('Waiting for ' + (step.color === 'w' ? 'White' : 'Black') + ' to play ' + step.label + '...');
+  }
+}
+
+function handleFreeplayMove(moveObj, fenBefore){
+  const tags = describeMoveTags(moveObj);
+  // Compare to engine's best move at the prior position
+  const tempBest = new Chess(fenBefore);
+  const bestResult = findBestMove(tempBest, BOT_DEPTH);
+  const mover = moveObj.color;
+
+  const tempUser = new Chess(fenBefore);
+  tempUser.move({ from: moveObj.from, to: moveObj.to, promotion:'q' });
+  const userEvalRaw = tempUser.game_over() && tempUser.in_checkmate()
+    ? (mover === 'w' ? 100000 : -100000)
+    : minimax(tempUser, BOT_DEPTH - 1, -Infinity, Infinity, tempUser.turn() === 'w');
+
+  const userAdv = mover === 'w' ? userEvalRaw : -userEvalRaw;
+  const bestAdv = mover === 'w' ? bestResult.eval : -bestResult.eval;
+  const delta = bestAdv - userAdv;
+
+  const sameAsBest = bestResult.move && bestResult.move.from === moveObj.from && bestResult.move.to === moveObj.to;
+
+  if(sameAsBest || delta <= 20){
+    logCommentary('Your move: ' + moveObj.san + ' — best move', tagsToSentence(tags), 'best');
+  } else if(delta <= 120){
+    logCommentary('Your move: ' + moveObj.san, tagsToSentence(tags) + ' A slightly stronger option was ' + bestResult.move.san + '.', 'better');
+  } else {
+    logCommentary('Your move: ' + moveObj.san, tagsToSentence(tags) + ' Stronger was ' + bestResult.move.san + ' — ' + tagsToSentence(describeMoveTags(bestResult.move)) + ' (noticeably better here).', 'better');
+  }
+
+  checkGameOver();
+  if(!game.game_over()){
+    botThinking = true;
+    setStatus('Bot is thinking...');
+    setTimeout(playBotMove, 450);
+  }
+}
+
+function playBotMove(){
+  const result = findBestMove(game, BOT_DEPTH);
+  if(!result.move){ botThinking = false; return; }
+  const fenBefore = game.fen();
+  const moveObj = game.move(result.move.san);
+  lastMove = { from: moveObj.from, to: moveObj.to };
+  const tags = describeMoveTags(moveObj);
+  logCommentary('Bot plays ' + moveObj.san, tagsToSentence(tags), 'opponent');
+  botThinking = false;
+  renderBoard();
+  checkGameOver();
+  if(!game.game_over()) setStatus((game.turn() === userColor ? 'Your move.' : 'Waiting...'));
+}
+
+function checkGameOver(){
+  if(game.in_checkmate()){
+    const winner = game.turn() === 'w' ? 'Black' : 'White';
+    setStatus('Checkmate — ' + winner + ' wins.');
+    logCommentary('Game over', 'Checkmate! ' + winner + ' wins.', 'system');
+  } else if(game.in_stalemate()){
+    setStatus('Stalemate — draw.');
+    logCommentary('Game over', 'Stalemate — the game is a draw.', 'system');
+  } else if(game.in_draw()){
+    setStatus('Draw.');
+    logCommentary('Game over', 'Draw (insufficient material, repetition, or 50-move rule).', 'system');
+  }
+}
+
+function handleMatesMove(moveObj, fenBefore, prevLastMove){
+  const puzzle = currentPuzzle();
+  if(game.in_checkmate()){
+    puzzleSolved = true;
+    setStatus('Solved! ' + puzzle.name);
+    logCommentary('Checkmate! ' + moveObj.san, puzzle.pattern, 'best');
+  } else {
+    game.undo();
+    lastMove = prevLastMove;
+    puzzleAttempts++;
+    if(puzzleAttempts >= 2){
+      const sq = puzzle.solution;
+      logCommentary('Hint', 'Try the piece on ' + sq.from + ' moving to ' + sq.to + '.', 'system');
+    } else {
+      logCommentary('Not mate', 'That move doesn\'t deliver checkmate. Look for a move that leaves the king with zero escape squares.', 'system');
+    }
+  }
+}
+
+// ---------- Mode switching / setup ----------
+function renderOpeningsPanel(){
+  const list = document.getElementById('line-list');
+  list.innerHTML = '';
+  OPENINGS.forEach(o => {
+    const btn = document.createElement('button');
+    btn.textContent = o.name;
+    if(o.id === currentLineId) btn.className = 'active';
+    btn.addEventListener('click', () => {
+      currentLineId = o.id;
+      openingStudentColor = o.defaultColor;
+      startOpeningLine();
+    });
+    list.appendChild(btn);
+  });
+  const line = currentLine();
+  document.getElementById('line-desc').textContent = line.desc;
+  const radio = document.querySelector('input[name=openingcolor][value="' + openingStudentColor + '"]');
+  if(radio) radio.checked = true;
+  updateLineProgress();
+}
+
+function startOpeningLine(){
+  game = new Chess();
+  currentStepIndex = 0;
+  lineWrongAttempts = 0;
+  announcedStepIndex = -1;
+  lastMove = null;
+  selectedSquare = null;
+  legalTargets = [];
+  clearCommentary();
+  renderOpeningsPanel();
+  const line = currentLine();
+  logCommentary('Starting line', line.name + ' — practicing as ' + (openingStudentColor === 'w' ? 'White' : 'Black') + ': ' + line.desc, 'system');
+  updateOpeningStatus();
+  renderBoard();
+  setTimeout(playAutoOpeningStep, 300);
+}
+
+function renderPuzzlesPanel(){
+  const list = document.getElementById('puzzle-list');
+  list.innerHTML = '';
+  PUZZLES.forEach(p => {
+    const btn = document.createElement('button');
+    btn.textContent = p.name;
+    if(p.id === currentPuzzleId) btn.className = 'active';
+    btn.addEventListener('click', () => { currentPuzzleId = p.id; startPuzzle(); });
+    list.appendChild(btn);
+  });
+}
+
+function startPuzzle(){
+  const puzzle = currentPuzzle();
+  game = new Chess(puzzle.fen);
+  puzzleAttempts = 0;
+  puzzleSolved = false;
+  lastMove = null;
+  selectedSquare = null;
+  legalTargets = [];
+  clearCommentary();
+  renderPuzzlesPanel();
+  logCommentary(puzzle.name, 'White to move. Find the checkmate in one.', 'system');
+  setStatus('Find checkmate in one move.');
+  renderBoard();
+}
+
+function startFreeplay(){
+  game = new Chess();
+  lastMove = null;
+  selectedSquare = null;
+  legalTargets = [];
+  botThinking = false;
+  clearCommentary();
+  logCommentary('New game', 'You are playing ' + (userColor === 'w' ? 'White' : 'Black') + ' against the practice bot.', 'system');
+  setStatus(userColor === 'w' ? 'Your move.' : 'Waiting for White (bot)...');
+  renderBoard();
+  if(userColor === 'b'){
+    botThinking = true;
+    setTimeout(playBotMove, 400);
+  }
+}
+
+function renderBoardControls(){
+  const el = document.getElementById('board-controls');
+  el.innerHTML = '';
+  if(mode === 'openings'){
+    const btn = document.createElement('button');
+    btn.textContent = 'Restart this line';
+    btn.addEventListener('click', startOpeningLine);
+    el.appendChild(btn);
+  } else if(mode === 'freeplay'){
+    const btn = document.createElement('button');
+    btn.textContent = 'New Game';
+    btn.addEventListener('click', startFreeplay);
+    el.appendChild(btn);
+  } else if(mode === 'mates'){
+    const btn = document.createElement('button');
+    btn.textContent = 'Reset Puzzle';
+    btn.addEventListener('click', startPuzzle);
+    el.appendChild(btn);
+    const solBtn = document.createElement('button');
+    solBtn.textContent = 'Show Solution';
+    solBtn.addEventListener('click', () => {
+      const puzzle = currentPuzzle();
+      logCommentary('Solution', puzzle.solution.from + ' → ' + puzzle.solution.to + '. ' + puzzle.pattern, 'system');
+    });
+    el.appendChild(solBtn);
+  }
+}
+
+function switchMode(newMode){
+  mode = newMode;
+  document.querySelectorAll('nav button').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  document.querySelectorAll('.mode-view').forEach(v => v.classList.remove('active'));
+  document.getElementById('view-' + mode).classList.add('active');
+  renderBoardControls();
+  if(mode === 'openings'){ renderOpeningsPanel(); startOpeningLine(); }
+  else if(mode === 'freeplay'){ startFreeplay(); }
+  else if(mode === 'mates'){ renderPuzzlesPanel(); startPuzzle(); }
+}
+
+// ---------- Init ----------
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+});
+document.querySelectorAll('input[name=fpcolor]').forEach(r => {
+  r.addEventListener('change', (e) => { userColor = e.target.value; startFreeplay(); });
+});
+document.querySelectorAll('input[name=openingcolor]').forEach(r => {
+  r.addEventListener('change', (e) => { openingStudentColor = e.target.value; startOpeningLine(); });
+});
+document.getElementById('commentary-log').addEventListener('click', (e) => {
+  const t = e.target.closest('.term');
+  if(!t) return;
+  showGlossaryPopup(t.dataset.label, t.dataset.def);
+});
+
+renderBoardControls();
+renderOpeningsPanel();
+startOpeningLine();
+
+})();
+</script>
+</body>
+</html>
