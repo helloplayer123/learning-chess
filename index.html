@@ -10,6 +10,7 @@
     --bg:#1a1a1a; --panel:#242424; --panel2:#2c2c2c; --border:#3a3a3a;
     --light-sq:#eddcb4; --dark-sq:#a97a50; --accent:#7fb069; --accent2:#e0a458;
     --text:#eaeaea; --muted:#9a9a9a; --danger:#d16a6a; --info:#5a9bd4;
+    --preview:#b58ee0; --altnote:#4fb8a6;
   }
   * { box-sizing:border-box; }
   body{
@@ -74,8 +75,25 @@
   .entry.system{ border-color:var(--info); }
   .entry.best{ border-color:var(--accent); }
   .entry.better{ border-color:var(--accent2); }
-  .entry.preview{ border-color:var(--accent2); background:rgba(224,164,88,0.06); }
-  .entry.alt{ border-color:var(--info); background:rgba(90,155,212,0.07); }
+  .entry.preview{ border-color:var(--preview); background:rgba(181,142,224,0.07); }
+  .entry.alt{ border-color:var(--altnote); background:rgba(79,184,166,0.07); }
+  .entry-row{ display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:stretch; }
+  .entry-row .entry{ margin:0; }
+  @media (max-width:700px){ .entry-row{ grid-template-columns:1fr; } }
+  .legend{ display:flex; flex-wrap:wrap; gap:10px 16px; margin-bottom:12px; font-size:0.76rem; color:var(--muted); }
+  .legend-item{ display:flex; align-items:center; gap:6px; }
+  .legend-dot{ width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .move-list{ font-family:'SF Mono',Consolas,monospace; font-size:0.85rem; line-height:1.9; max-height:220px; overflow-y:auto; }
+  .move-list .mv-pair{ display:inline; margin-right:10px; white-space:nowrap; }
+  .move-list .mv-num{ color:var(--muted); margin-right:3px; }
+  .move-list .mv-san{ color:var(--text); }
+  .move-list .mv-ann{ font-weight:700; }
+  .ann-great{ color:var(--accent); }
+  .ann-good{ color:#9fd0e0; }
+  .ann-dubious{ color:var(--accent2); }
+  .ann-mistake{ color:#e08a4f; }
+  .ann-blunder{ color:var(--danger); }
+  .move-list-empty{ color:var(--muted); font-size:0.85rem; }
   .term{ border-bottom:1px dotted var(--accent2); cursor:help; color:var(--accent2); }
   #glossary-popup{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); align-items:center; justify-content:center; z-index:50; }
   #glossary-popup.show{ display:flex; }
@@ -141,6 +159,9 @@
         <label class="radio-opt"><input type="radio" name="openingcolor" value="w"> Practice as White</label>
         <label class="radio-opt"><input type="radio" name="openingcolor" value="b"> Practice as Black</label>
       </div>
+      <div style="margin-bottom:10px;">
+        <label class="radio-opt"><input type="checkbox" id="whatif-toggle" checked> Show "what if you don't play this?" for every move</label>
+      </div>
       <div class="line-list" id="line-list"></div>
       <div class="repertoire-desc" id="line-desc"></div>
       <p class="repertoire-desc">Tip: switch sides anytime with the toggle above to see the position from the other player's perspective too.</p>
@@ -163,7 +184,13 @@
     </div>
 
     <div class="panel">
+      <h3>Move List</h3>
+      <div class="move-list" id="move-list"><div class="move-list-empty">No moves yet.</div></div>
+    </div>
+
+    <div class="panel">
       <h3>Commentary</h3>
+      <div class="legend" id="legend"></div>
       <div id="commentary-log"></div>
     </div>
 
@@ -349,6 +376,16 @@ const CENTER = ['d4','d5','e4','e5'];
 const EXT_CENTER = ['c3','c4','c5','c6','d3','d4','d5','d6','e3','e4','e5','e6','f3','f4','f5','f6'];
 const BOT_DEPTH = 3;
 
+// ---------- Data: commentary color legend ----------
+const LEGEND = [
+  { cls:'opponent', color:'var(--danger)', label:'Opponent\'s move' },
+  { cls:'student',  color:'var(--accent)', label:'Your move — correct / best' },
+  { cls:'better',   color:'var(--accent2)', label:'Your move — a stronger option existed' },
+  { cls:'preview',  color:'var(--preview)', label:'Coming up — preview of your next move' },
+  { cls:'alt',      color:'var(--altnote)', label:'What if — exploring an alternative move' },
+  { cls:'system',   color:'var(--info)', label:'System note (line info, hints, game status)' }
+];
+
 // ---------- Global state ----------
 let mode = 'openings';
 let game = new Chess();
@@ -356,6 +393,7 @@ let selectedSquare = null;
 let legalTargets = [];
 let lastMove = null;
 let botThinking = false;
+let moveList = [];
 
 // openings state
 let currentLineId = OPENINGS[0].id;
@@ -363,9 +401,12 @@ let openingStudentColor = OPENINGS[0].defaultColor;
 let currentStepIndex = 0;
 let lineWrongAttempts = 0;
 let announcedStepIndex = -1;
+let showWhatIfAlways = true;
+let openingAutoTimeout = null;
 
 // freeplay state
 let userColor = 'w';
+let freeplayBotTimeout = null;
 
 // mates state
 let currentPuzzleId = PUZZLES[0].id;
@@ -376,14 +417,38 @@ let puzzleSolved = false;
 function currentLine(){ return OPENINGS.find(o => o.id === currentLineId); }
 function currentPuzzle(){ return PUZZLES.find(p => p.id === currentPuzzleId); }
 
+// Cancels any pending auto-move/bot-move timers from a previous line, game, or
+// puzzle so they can't fire late and corrupt a freshly-started position or
+// leak stray commentary into a just-cleared log.
+function cancelPendingTimeouts(){
+  if(openingAutoTimeout){ clearTimeout(openingAutoTimeout); openingAutoTimeout = null; }
+  if(freeplayBotTimeout){ clearTimeout(freeplayBotTimeout); freeplayBotTimeout = null; }
+}
+
 function squareName(row, col){ return 'abcdefgh'[col] + (8 - row); }
 
-function logCommentary(title, text, type){
-  const log = document.getElementById('commentary-log');
+function buildEntryDiv(title, text, type){
   const div = document.createElement('div');
   div.className = 'entry ' + (type || 'system');
   div.innerHTML = '<div class="etitle">' + linkifyGlossary(title) + '</div><div>' + linkifyGlossary(text) + '</div>';
-  log.appendChild(div);
+  return div;
+}
+
+function logCommentary(title, text, type){
+  const log = document.getElementById('commentary-log');
+  log.appendChild(buildEntryDiv(title, text, type));
+  log.scrollTop = log.scrollHeight;
+}
+
+// Logs one move as a single row with two side-by-side columns:
+// left = the move that was played + its explanation, right = the "what if" alternative.
+function logMovePair(leftTitle, leftText, leftType, rightTitle, rightText, rightType){
+  const log = document.getElementById('commentary-log');
+  const row = document.createElement('div');
+  row.className = 'entry-row';
+  row.appendChild(buildEntryDiv(leftTitle, leftText, leftType));
+  row.appendChild(buildEntryDiv(rightTitle, rightText, rightType || 'alt'));
+  log.appendChild(row);
   log.scrollTop = log.scrollHeight;
 }
 
@@ -396,10 +461,27 @@ function setStatus(text){
 }
 
 // ---------- Board rendering ----------
+function shouldFlipBoard(){
+  if(mode === 'openings') return openingStudentColor === 'b';
+  if(mode === 'freeplay') return userColor === 'b';
+  return false;
+}
+
+function renderCoordinateLabels(flipped){
+  const ranks = flipped ? [1,2,3,4,5,6,7,8] : [8,7,6,5,4,3,2,1];
+  const files = flipped ? ['h','g','f','e','d','c','b','a'] : ['a','b','c','d','e','f','g','h'];
+  const rankEl = document.querySelector('.rank-labels');
+  const fileEl = document.querySelector('.file-labels');
+  if(rankEl) rankEl.innerHTML = ranks.map(r => '<div>' + r + '</div>').join('');
+  if(fileEl) fileEl.innerHTML = files.map(f => '<div>' + f + '</div>').join('');
+}
+
 function renderBoard(){
   const boardEl = document.getElementById('board');
   boardEl.innerHTML = '';
   const board = game.board();
+  const flipped = shouldFlipBoard();
+  renderCoordinateLabels(flipped);
 
   let hintFrom = null, hintTo = null;
   if(mode === 'openings'){
@@ -410,8 +492,10 @@ function renderBoard(){
     }
   }
 
-  for(let row=0; row<8; row++){
-    for(let col=0; col<8; col++){
+  for(let dr=0; dr<8; dr++){
+    for(let dc=0; dc<8; dc++){
+      const row = flipped ? 7 - dr : dr;
+      const col = flipped ? 7 - dc : dc;
       const sq = squareName(row, col);
       const cell = board[row][col];
       const div = document.createElement('div');
@@ -434,6 +518,76 @@ function renderBoard(){
       boardEl.appendChild(div);
     }
   }
+}
+
+// ---------- Legend ----------
+function renderLegend(){
+  const el = document.getElementById('legend');
+  if(!el || el.childElementCount > 0) return;
+  el.innerHTML = LEGEND.map(l =>
+    '<div class="legend-item"><span class="legend-dot" style="background:' + l.color + '"></span>' + l.label + '</div>'
+  ).join('');
+}
+
+// ---------- Move list (standard notation with annotations) ----------
+function resetMoveList(){
+  moveList = [];
+  renderMoveList();
+}
+
+function pushMoveToList(color, san, annotation){
+  if(color === 'w'){
+    moveList.push({ num: moveList.length + 1, w: { san, annotation }, b: null });
+  } else {
+    if(moveList.length === 0 || moveList[moveList.length - 1].b){
+      moveList.push({ num: moveList.length + 1, w: null, b: { san, annotation } });
+    } else {
+      moveList[moveList.length - 1].b = { san, annotation };
+    }
+  }
+  renderMoveList();
+}
+
+function annotationClass(ann){
+  if(ann === '!!') return 'ann-great';
+  if(ann === '!') return 'ann-good';
+  if(ann === '?!') return 'ann-dubious';
+  if(ann === '?') return 'ann-mistake';
+  if(ann === '??') return 'ann-blunder';
+  return '';
+}
+
+function formatHalfMove(half){
+  if(!half) return '';
+  const annCls = annotationClass(half.annotation);
+  return '<span class="mv-san">' + half.san + '</span>' + (half.annotation ? '<span class="mv-ann ' + annCls + '"> ' + half.annotation + '</span>' : '');
+}
+
+function renderMoveList(){
+  const el = document.getElementById('move-list');
+  if(moveList.length === 0){
+    el.innerHTML = '<div class="move-list-empty">No moves yet.</div>';
+    return;
+  }
+  el.innerHTML = moveList.map(pair =>
+    '<span class="mv-pair"><span class="mv-num">' + pair.num + '.</span> ' +
+    formatHalfMove(pair.w) + (pair.b ? ' ' + formatHalfMove(pair.b) : '') + '</span>'
+  ).join(' ');
+  el.scrollTop = el.scrollHeight;
+}
+
+// Computes a standard-notation quality annotation (!!, !, ?!, ?, ??) from the
+// engine's centipawn-style delta (loss vs best move) and move tags.
+function computeAnnotation(sameAsBest, delta, tags){
+  if(sameAsBest){
+    if(tags.includes('mate')) return '!!';
+    if(tags.includes('capture') || tags.includes('check')) return '!';
+    return '';
+  }
+  if(delta <= 50) return '';
+  if(delta <= 150) return '?!';
+  if(delta <= 400) return '?';
+  return '??';
 }
 
 function clearSelection(){
@@ -575,6 +729,52 @@ function findBestMove(g, depth){
   return { move: bestMove, eval: bestEval };
 }
 
+// Returns a "what if this move isn't played?" explanation for any opening step.
+// Uses the hand-authored note when present; otherwise computes a real alternative
+// with the built-in engine and describes it generically.
+function getWhatIfText(fenBefore, step){
+  if(step.alternative) return step.alternative;
+
+  const probe = new Chess(fenBefore);
+  const bookMove = probe.moves({ verbose:true }).find(m => m.from === step.from && m.to === step.to);
+  const altCandidates = probe.moves({ verbose:true }).filter(m => !(m.from === step.from && m.to === step.to));
+  if(!bookMove || altCandidates.length === 0) return null;
+  const side = probe.turn();
+  const who = side === 'w' ? 'White' : 'Black';
+
+  const t1 = new Chess(fenBefore);
+  t1.move({ from: step.from, to: step.to, promotion:'q' });
+  const bookEval = minimax(t1, BOT_DEPTH - 1, -Infinity, Infinity, t1.turn() === 'w');
+
+  let bestAlt = null;
+  let bestAltEval = side === 'w' ? -Infinity : Infinity;
+  altCandidates.forEach(m => {
+    const t2 = new Chess(fenBefore);
+    t2.move(m.san);
+    const ev = minimax(t2, BOT_DEPTH - 1, -Infinity, Infinity, t2.turn() === 'w');
+    if(side === 'w' ? ev > bestAltEval : ev < bestAltEval){ bestAltEval = ev; bestAlt = m; }
+  });
+  if(!bestAlt) return null;
+
+  const bookAdv = side === 'w' ? bookEval : -bookEval;
+  const altAdv = side === 'w' ? bestAltEval : -bestAltEval;
+  const delta = bookAdv - altAdv;
+
+  const altSentence = tagsToSentence(describeMoveTags(bestAlt));
+  const altSentenceLower = altSentence.charAt(0).toLowerCase() + altSentence.slice(1);
+
+  let verdict;
+  if(delta > 120){
+    verdict = 'but ' + step.label + ' is noticeably stronger here — that alternative gives up a real advantage.';
+  } else if(delta > 30){
+    verdict = 'though ' + step.label + ' is still considered the more precise choice in this position.';
+  } else {
+    verdict = 'and it\'s a genuinely reasonable alternative — ' + step.label + ' is simply the more standard choice for this repertoire.';
+  }
+
+  return 'Instead, ' + who + ' could try ' + bestAlt.san + ' here — it ' + altSentenceLower + ' ' + verdict;
+}
+
 // ---------- Move handling per mode ----------
 function attemptMove(from, to){
   const fenBefore = game.fen();
@@ -597,6 +797,7 @@ function handleOpeningMove(moveObj, fenBefore, prevLastMove){
   const step = line.steps[currentStepIndex];
   if(moveObj.from === step.from && moveObj.to === step.to){
     logCommentary('✓ Correct — ' + step.label + ' played', 'That matches the recommended line.', 'student');
+    pushMoveToList(moveObj.color, moveObj.san, step.alternative ? '!' : '');
     currentStepIndex++;
     lineWrongAttempts = 0;
     updateLineProgress();
@@ -605,7 +806,7 @@ function handleOpeningMove(moveObj, fenBefore, prevLastMove){
       logCommentary('Line complete', 'You\'ve played through the ' + line.name + ' main line. Try another repertoire line, or replay this one to lock it in.', 'system');
     } else {
       updateOpeningStatus();
-      setTimeout(playAutoOpeningStep, 500);
+      openingAutoTimeout = setTimeout(playAutoOpeningStep, 500);
     }
   } else {
     game.undo();
@@ -629,11 +830,16 @@ function playAutoOpeningStep(){
     renderBoard();
     return;
   }
-  game.move({ from: step.from, to: step.to, promotion:'q' });
+  const fenBeforeStep = game.fen();
+  const autoMoveObj = game.move({ from: step.from, to: step.to, promotion:'q' });
   lastMove = { from: step.from, to: step.to };
-  logCommentary((step.color === 'w' ? 'White' : 'Black') + ' plays ' + step.label, step.explain, 'opponent');
-  if(step.alternative){
-    logCommentary('What if ' + (step.color === 'w' ? 'White' : 'Black') + ' had played something else?', step.alternative, 'alt');
+  pushMoveToList(step.color, autoMoveObj.san, step.alternative ? '!' : '');
+  const moveTitle = (step.color === 'w' ? 'White' : 'Black') + ' plays ' + step.label;
+  const whatIfText = showWhatIfAlways ? getWhatIfText(fenBeforeStep, step) : null;
+  if(whatIfText){
+    logMovePair(moveTitle, step.explain, 'opponent', 'What if ' + (step.color === 'w' ? 'White' : 'Black') + ' had played something else?', whatIfText, 'alt');
+  } else {
+    logCommentary(moveTitle, step.explain, 'opponent');
   }
   currentStepIndex++;
   updateLineProgress();
@@ -642,7 +848,7 @@ function playAutoOpeningStep(){
     updateOpeningStatus();
     logCommentary('Line complete', 'You\'ve played through the ' + line.name + ' main line. Try another repertoire line, or replay this one to lock it in.', 'system');
   } else {
-    setTimeout(playAutoOpeningStep, 400);
+    openingAutoTimeout = setTimeout(playAutoOpeningStep, 400);
   }
 }
 
@@ -662,9 +868,12 @@ function updateOpeningStatus(){
   if(step.color === openingStudentColor){
     setStatus('Your move: play ' + step.label + '  (click the highlighted square, then the highlighted destination: ' + step.from + ' → ' + step.to + ')');
     if(announcedStepIndex !== currentStepIndex){
-      logCommentary('Coming up: ' + step.label + ' (' + step.from + ' → ' + step.to + ')', step.explain, 'preview');
-      if(step.alternative){
-        logCommentary('What if you don\'t play this?', step.alternative, 'alt');
+      const previewTitle = 'Coming up: ' + step.label + ' (' + step.from + ' → ' + step.to + ')';
+      const whatIfText = showWhatIfAlways ? getWhatIfText(game.fen(), step) : null;
+      if(whatIfText){
+        logMovePair(previewTitle, step.explain, 'preview', 'What if you don\'t play this?', whatIfText, 'alt');
+      } else {
+        logCommentary(previewTitle, step.explain, 'preview');
       }
       announcedStepIndex = currentStepIndex;
     }
@@ -691,6 +900,8 @@ function handleFreeplayMove(moveObj, fenBefore){
   const delta = bestAdv - userAdv;
 
   const sameAsBest = bestResult.move && bestResult.move.from === moveObj.from && bestResult.move.to === moveObj.to;
+  const annotation = computeAnnotation(sameAsBest, delta, tags);
+  pushMoveToList(mover, moveObj.san, annotation);
 
   if(sameAsBest || delta <= 20){
     logCommentary('Your move: ' + moveObj.san + ' — best move', tagsToSentence(tags), 'best');
@@ -704,7 +915,7 @@ function handleFreeplayMove(moveObj, fenBefore){
   if(!game.game_over()){
     botThinking = true;
     setStatus('Bot is thinking...');
-    setTimeout(playBotMove, 450);
+    freeplayBotTimeout = setTimeout(playBotMove, 450);
   }
 }
 
@@ -716,6 +927,7 @@ function playBotMove(){
   lastMove = { from: moveObj.from, to: moveObj.to };
   const tags = describeMoveTags(moveObj);
   logCommentary('Bot plays ' + moveObj.san, tagsToSentence(tags), 'opponent');
+  pushMoveToList(moveObj.color, moveObj.san, computeAnnotation(true, 0, tags));
   botThinking = false;
   renderBoard();
   checkGameOver();
@@ -742,6 +954,7 @@ function handleMatesMove(moveObj, fenBefore, prevLastMove){
     puzzleSolved = true;
     setStatus('Solved! ' + puzzle.name);
     logCommentary('Checkmate! ' + moveObj.san, puzzle.pattern, 'best');
+    pushMoveToList(moveObj.color, moveObj.san, '!!');
   } else {
     game.undo();
     lastMove = prevLastMove;
@@ -778,6 +991,7 @@ function renderOpeningsPanel(){
 }
 
 function startOpeningLine(){
+  cancelPendingTimeouts();
   game = new Chess();
   currentStepIndex = 0;
   lineWrongAttempts = 0;
@@ -786,12 +1000,13 @@ function startOpeningLine(){
   selectedSquare = null;
   legalTargets = [];
   clearCommentary();
+  resetMoveList();
   renderOpeningsPanel();
   const line = currentLine();
   logCommentary('Starting line', line.name + ' — practicing as ' + (openingStudentColor === 'w' ? 'White' : 'Black') + ': ' + line.desc, 'system');
   updateOpeningStatus();
   renderBoard();
-  setTimeout(playAutoOpeningStep, 300);
+  openingAutoTimeout = setTimeout(playAutoOpeningStep, 300);
 }
 
 function renderPuzzlesPanel(){
@@ -807,6 +1022,7 @@ function renderPuzzlesPanel(){
 }
 
 function startPuzzle(){
+  cancelPendingTimeouts();
   const puzzle = currentPuzzle();
   game = new Chess(puzzle.fen);
   puzzleAttempts = 0;
@@ -815,6 +1031,7 @@ function startPuzzle(){
   selectedSquare = null;
   legalTargets = [];
   clearCommentary();
+  resetMoveList();
   renderPuzzlesPanel();
   logCommentary(puzzle.name, 'White to move. Find the checkmate in one.', 'system');
   setStatus('Find checkmate in one move.');
@@ -822,18 +1039,20 @@ function startPuzzle(){
 }
 
 function startFreeplay(){
+  cancelPendingTimeouts();
   game = new Chess();
   lastMove = null;
   selectedSquare = null;
   legalTargets = [];
   botThinking = false;
   clearCommentary();
+  resetMoveList();
   logCommentary('New game', 'You are playing ' + (userColor === 'w' ? 'White' : 'Black') + ' against the practice bot.', 'system');
   setStatus(userColor === 'w' ? 'Your move.' : 'Waiting for White (bot)...');
   renderBoard();
   if(userColor === 'b'){
     botThinking = true;
-    setTimeout(playBotMove, 400);
+    freeplayBotTimeout = setTimeout(playBotMove, 400);
   }
 }
 
@@ -893,7 +1112,11 @@ document.getElementById('commentary-log').addEventListener('click', (e) => {
   if(!t) return;
   showGlossaryPopup(t.dataset.label, t.dataset.def);
 });
+document.getElementById('whatif-toggle').addEventListener('change', (e) => {
+  showWhatIfAlways = e.target.checked;
+});
 
+renderLegend();
 renderBoardControls();
 renderOpeningsPanel();
 startOpeningLine();
